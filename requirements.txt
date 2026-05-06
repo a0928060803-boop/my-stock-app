@@ -1,7 +1,7 @@
 streamlit
 yfinance
 pandas
-pandas-ta
 plotly
 beautifulsoup4
 requests
+git+https://github.com
