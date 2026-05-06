@@ -26,10 +26,10 @@ def get_real_chinese_name(symbol):
 
 # --- 3. 頂部導航輸入區 ---
 st.title("🏥 小白股票診療室 Pro")
-quick_select = st.selectbox("🔥 熱門標的快速選單", ["手動輸入代號", "2330 台積電", "2317 鴻海", "00878 國泰高股息", "2634 漢翔", "2314 台揚"])
+quick_select = st.selectbox("🔥 熱門標的快速選單", ["手動輸入代號", "2330 台積電", "2317 鴻海", "2634 漢翔", "00878 國泰高股息", "2314 台揚"])
 default_id = quick_select.split(' ') if quick_select != "手動輸入代號" else "2330"
 
-col_input, col_btn = st.columns([3, 1])
+col_input, col_btn = st.columns()
 with col_input:
     stock_id = st.text_input("輸入代號：", default_id, label_visibility="collapsed")
 with col_btn:
@@ -41,7 +41,6 @@ if analyze_btn or stock_id:
     sid = stock_id.upper().strip()
     with st.spinner(f'專業分析中...'):
         try:
-            # 搜尋邏輯
             formatted_id = f"{sid}.TW" if sid.isdigit() else sid
             df = yf.download(formatted_id, period="1y", interval="1d", progress=False)
             if df.empty and formatted_id.endswith(".TW"):
@@ -58,14 +57,13 @@ if analyze_btn or stock_id:
                 df['D'] = df['K'].ewm(com=2).mean()
                 ema12, ema26 = df['Close'].ewm(span=12).mean(), df['Close'].ewm(span=26).mean()
                 df['DIF'] = ema12 - ema26
-                df['DEA'] = df['DIF'].ewm(span=9).mean()
-                df['MACD_HIST'] = df['DIF'] - df['DEA']
+                df['MACD_HIST'] = df['DIF'] - df['DIF'].ewm(span=9).mean()
 
                 # 關鍵數據提取
                 lp = float(df['Close'].iloc[-1])
                 ma20_val = float(df['MA20'].iloc[-1])
-                supp = float(df['Low'].tail(20).min()) 
-                resi = float(df['High'].tail(20).max()) 
+                supp = float(df['Low'].tail(20).min()) # 支撐(地板)
+                resi = float(df['High'].tail(20).max()) # 壓力(天花板)
                 k_val = float(df['K'].iloc[-1])
                 macd_h = float(df['MACD_HIST'].iloc[-1])
                 bias = float(df['BIAS'].iloc[-1])
@@ -76,13 +74,22 @@ if analyze_btn or stock_id:
                 # --- A. 診斷報告標題 ---
                 st.subheader(f"🏢 {stock_name} ({sid}) 診斷報告")
                 
-                # --- B. 新增：現價 / 買點 / 賣點 快速數據列 ---
-                # 買點設定在月線(支撐)，賣點設定在近期高點(壓力)
-                c_lp, c_buy, c_sell = st.columns(3)
-                c_lp.metric("📌 目前現價", f"{lp:.2f}", f"{lp - df['Close'].iloc[-2]:.2f}")
-                c_buy.metric("💡 建議買點", f"{ma20_val:.2f}")
-                c_sell.metric("🎯 建議賣點", f"{resi:.2f}")
-                st.write("") # 增加一點間距
+                # --- B. 關鍵價格看板 (現價/買點/賣點/停損) ---
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("📌 現價", f"{lp:.2f}", f"{lp - df['Close'].iloc[-2]:.2f}")
+                
+                # 建議買點：以月線為準，若現價已在月線下則以地板為準
+                buy_p = ma20_val if lp > ma20_val else supp
+                c2.metric("💡 買點", f"{buy_p:.2f}")
+                
+                # 建議賣點(目標)：近期天花板
+                c3.metric("🎯 賣點", f"{resi:.2f}")
+                
+                # 警示停損(逃命)：地板價再扣除1%作為緩衝，若跌破代表結構破壞
+                stop_loss = supp * 0.99
+                c4.metric("🚨 停損", f"{stop_loss:.2f}")
+                
+                st.write("") 
 
                 # --- C. 圖表分頁 ---
                 tab1, tab2, tab3, tab4, tab5 = st.tabs(["K線", "量能", "KD", "MACD", "乖離"])
@@ -110,7 +117,7 @@ if analyze_btn or stock_id:
                     fig3 = go.Figure()
                     fig3.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='#FF3232', width=2), name='K值'))
                     fig3.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='#00AB5E', width=2), name='D值'))
-                    fig3.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[0, 100]))
+                    fig3.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]))
                     st.plotly_chart(fig3, use_container_width=True)
 
                 with tab4:
@@ -130,29 +137,30 @@ if analyze_btn or stock_id:
                     fig5.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[-b_max, b_max]))
                     st.plotly_chart(fig5, use_container_width=True)
 
-                # --- D. 綜合分析與建議 ---
+                # --- D. 綜合分析與對策 ---
                 st.divider()
-                st.write("### 📝 聽得懂的行情分析")
+                st.write("### 📝 行情實戰分析")
                 a1, a2 = st.columns(2)
                 with a1:
-                    st.info("**📈 錢往哪裡跑？ (KD/MACD)**")
-                    st.write(f"● **市場熱度**：{'過熱！現在進場容易套在山頂' if k_val > 80 else '冷清，反而可以趁現在偷偷撿便宜' if k_val < 20 else '氣氛很穩，適合分批買'}")
-                    st.write(f"● **衝勁動能**：{'油門踩到底！股價正在往上衝' if macd_h > 0 else '車速慢下來了，小心隨時會倒車'}")
+                    st.info("**📈 市場情緒**")
+                    st.write(f"● **KD熱度**：{'過熱，別追了！' if k_val > 80 else '超跌，機會來了？' if k_val < 20 else '氣氛溫和'}")
+                    st.write(f"● **動能**：{'油門踩到底' if macd_h > 0 else '動力衰退中'}")
                 with a2:
-                    st.info("**📊 籌碼與距離 (VOL/BIAS)**")
-                    st.write(f"● **成交量**：{'今日有大戶進場！量多到嚇人' if vol > avg_vol * 1.5 else '今天都是小散戶在玩，沒大動作'}")
-                    st.write(f"● **月線距離**：{'跑太遠了！離月線太遠，會被吸回來' if abs(bias) > 5 else '跟月線保持安全距離，走得健康'}")
+                    st.info("**📊 籌碼與安全距離**")
+                    st.write(f"● **成交量**：{'爆量變盤訊號' if vol > avg_vol * 1.5 else '量能穩定'}")
+                    st.write(f"● **乖離率**：{'離月線太遠，小心回檔' if abs(bias) > 5 else '距離健康'}")
 
-                st.subheader("💡 最終投資對策")
+                st.subheader("💡 核心操作建議")
                 score = (1 if k_val < 40 else 0) + (1 if macd_h > 0 else 0) + (1 if lp > ma20_val else 0)
                 if score >= 2:
-                    st.success(f"**【 目前診斷：趨勢強勁，推薦買入/續抱 】**\n\n進場建議在 **{ma20_val:.2f}** 附近，停利目標看 **{resi:.2f}**。")
+                    st.success(f"**【 目前診斷：強勢格局，建議購入/續抱 】**\n\n進場參考點：**{buy_p:.2f}**，預期目標：**{resi:.2f}**。")
+                    st.write(f"⚠️ **保命叮嚀**：若意外跌破 **{stop_loss:.2f}**，代表趨勢反轉，請務必停損離場。")
                 elif score <= 0:
-                    st.error(f"**【 目前診斷：氣氛不對，建議賣出/觀望 】**\n\n目前跌勢未止。若有持股建議在 **{lp:.2f}** 減碼，等跌到 **{supp:.2f}** 守住再說。")
+                    st.error(f"**【 目前診斷：氣氛不對，建議賣出/觀望 】**\n\n建議暫時離場，等股價回到 **{supp:.2f}** 附近有撐再考慮。")
                 else:
-                    st.warning(f"**【 目前診斷：盤整走勢，建議低買高賣 】**\n\n不追高。在 **{supp:.2f}** 附近買，**{resi:.2f}** 附近賣。")
+                    st.warning(f"**【 目前診斷：盤整走勢，建議低買高賣 】**\n\n適合在 **{supp:.2f}** ~ **{resi:.2f}** 區間震盪操作。")
 
         except Exception as e:
             st.error(f"分析異常。")
 
-st.caption("v5.4 | 價格看板強化版")
+st.caption("v5.5 | 風控強化版")
