@@ -94,12 +94,12 @@ if analyze_btn or stock_id:
                 m3.metric("MACD 動能", f"{macd_h:.2f}")
                 m4.metric("乖離率 BIAS", f"{bias:.1f}%")
 
-                # --- 圖表顯示優化 (台股紅漲綠跌) ---
+                # --- 圖表顯示修正 (修正 fillcolor 屬性錯誤) ---
                 st.write("### 📈 股價走勢圖 (紅漲綠跌版)")
                 fig = go.Figure(data=[go.Candlestick(
                     x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線',
-                    increasing_line_color='#FF3232', increasing_fill_color='#FF3232', # 紅色上漲
-                    decreasing_line_color='#00AB5E', decreasing_fill_color='#00AB5E'  # 綠色下跌
+                    increasing_line_color='#FF3232', increasing_fillcolor='#FF3232', 
+                    decreasing_line_color='#00AB5E', decreasing_fillcolor='#00AB5E'  
                 )])
                 fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='月線'))
                 
@@ -134,11 +134,11 @@ if analyze_btn or stock_id:
                 score = (1 if k_val < 30 else 0) + (1 if macd_h > 0 else 0) + (1 if lp > df['MA20'].iloc[-1] else 0)
                 st.subheader("💡 系統最終建議")
                 if score >= 2: st.success("**【 綜合評等：強勢看多 】** 適合偏多思考。")
-                elif score <= 0: st.error("**【 綜合評等：偏空觀望 】** 不宜逆勢摸底。")
-                else: st.warning("**【 綜合評等：區間盤整 】** 建議低買高賣。")
+                elif score <= 0: st.error("**【 綜合評等：偏空觀望 】** 指標轉弱，不宜逆勢。")
+                else: st.warning("**【 綜合評等：區間盤整 】** 低買高賣。")
 
         except Exception as e:
             st.error(f"分析異常，原因：{e}")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("小白股票診療室 v3.6 | 台股配色版")
+st.sidebar.caption("小白股票診療室 v3.7 | 穩定修正版")
