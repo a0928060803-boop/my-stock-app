@@ -32,8 +32,9 @@ st.divider()
 
 if analyze_btn or stock_id:
     sid = stock_id.upper().strip()
-    with st.spinner(f'策略數據計算中...'):
+    with st.spinner(f'數據優化中...'):
         try:
+            # 搜尋邏輯
             formatted_id = f"{sid}.TW" if sid.isdigit() else sid
             df = yf.download(formatted_id, period="1y", interval="1d", progress=False)
             if df.empty and formatted_id.endswith(".TW"):
@@ -46,68 +47,90 @@ if analyze_btn or stock_id:
                 df['MA5'] = df['Close'].rolling(5).mean()
                 df['MA20'] = df['Close'].rolling(20).mean()
                 df['BIAS'] = ((df['Close'] - df['MA20']) / df['MA20']) * 100
-                low_10, high_10 = df['Low'].rolling(10).min(), df['High'].rolling(10).max()
-                high_20 = df['High'].rolling(20).max() # 用於大波段參考
-                
-                # KD & MACD (維持原本邏輯)
-                df['K'] = ((df['Close'] - df['Low'].rolling(9).min()) / (df['High'].rolling(9).max() - df['Low'].rolling(9).min()) * 100).ewm(com=2, adjust=False).mean()
+                low_9, high_9 = df['Low'].rolling(9).min(), df['High'].rolling(9).max()
+                df['K'] = ((df['Close'] - low_9) / (high_9 - low_9) * 100).ewm(com=2, adjust=False).mean()
+                df['D'] = df['K'].rolling(3).mean()
                 ema12, ema26 = df['Close'].ewm(span=12).mean(), df['Close'].ewm(span=26).mean()
-                df['MACD_HIST'] = (ema12 - ema26) - (ema12 - ema26).ewm(span=9).mean()
+                df['DIF'] = ema12 - ema26
+                df['DEA'] = df['DIF'].ewm(span=9).mean()
+                df['MACD_HIST'] = df['DIF'] - df['DEA']
+                high_20 = df['High'].rolling(20).max()
 
+                # 最新數據
                 lp = float(df['Close'].iloc[-1])
-                ma5_v = float(df['MA5'].iloc[-1])
-                supp_10 = float(df['Low'].tail(10).min()) 
-                k_v = float(df['K'].iloc[-1])
-                macd_h = float(df['MACD_HIST'].iloc[-1])
-                bias_v = float(df['BIAS'].iloc[-1])
+                ma5_v, ma20_v = float(df['MA5'].iloc[-1]), float(df['MA20'].iloc[-1])
+                k_v, macd_h, bias_v = float(df['K'].iloc[-1]), float(df['MACD_HIST'].iloc[-1]), float(df['BIAS'].iloc[-1])
+                supp_10, resi_10 = float(df['Low'].tail(10).min()), float(df['High'].tail(10).max())
                 stock_name = get_real_chinese_name(sid)
 
                 st.subheader(f"🏢 {stock_name} ({sid})")
                 
-                # --- [實戰核心] 買賣點重新定義 ---
+                # --- 關鍵價格看板 ---
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("📌 現價", f"{lp:.2f}", f"{lp - df['Close'].iloc[-2]:.2f}")
-                
-                # 買點：強勢股回檔 5MA 為最佳介入點
-                buy_p = ma5_v
-                c2.metric("🚀 買點(5MA)", f"{buy_p:.2f}")
-                
-                # 賣點：改用「分批獲利」邏輯。取 10日高與 20日高的平均，或是現價 + 7% (波段目標)
+                c2.metric("🚀 買點", f"{ma5_v:.2f}")
                 wave_target = max(float(high_20.iloc[-1]), lp * 1.07)
-                c3.metric("🎯 賣點(波段)", f"{wave_target:.2f}")
-                
-                # 停損：維持 10日低點，因為短線結構破壞必須快逃
-                stop_l = supp_10 * 0.99
-                c4.metric("🚨 停損(保命)", f"{stop_l:.2f}")
-                
-                # --- 圖表與報告 (略，同前版邏輯) ---
+                c3.metric("🎯 賣點", f"{wave_target:.2f}")
+                c4.metric("🚨 停損", f"{supp_10 * 0.99:.2f}")
+
+                # --- 核心：圖表顯示區 (限制 X 軸範圍為 45 天) ---
                 tab1, tab2, tab3, tab4, tab5 = st.tabs(["K線", "量能", "KD", "MACD", "乖離"])
-                last_date, start_date = df.index[-1], df.index[-1] - pd.Timedelta(days=60)
+                last_date = df.index[-1]
+                start_date = last_date - pd.Timedelta(days=45) # 手機版顯示 45 天最清晰
                 r_df = df[df.index >= start_date]
+
                 with tab1:
                     y_mi, y_ma = r_df['Low'].min() * 0.98, r_df['High'].max() * 1.02
                     fig1 = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', increasing_line_color='#FF3232', increasing_fillcolor='#FF3232', decreasing_line_color='#00AB5E', decreasing_fillcolor='#00AB5E')])
-                    fig1.add_trace(go.Scatter(x=df.index, y=df['MA5'], line=dict(color='cyan', width=1), name='5MA'))
+                    fig1.add_trace(go.Scatter(x=df.index, y=df['MA5'], line=dict(color='cyan', width=1.5), name='5MA'))
                     fig1.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='20MA'))
-                    fig1.update_layout(height=400, xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[y_mi, y_ma]))
+                    fig1.update_layout(height=450, xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[y_mi, y_ma], fixedrange=False))
                     st.plotly_chart(fig1, use_container_width=True)
-                # ... (Tab 2-5 維持 v6.1 代碼) ...
 
+                with tab2:
+                    v_ma = r_df['Volume'].max() * 1.1
+                    fig2 = go.Figure(data=[go.Bar(x=df.index, y=df['Volume'], marker_color=['#FF3232' if c>=o else '#00AB5E' for c,o in zip(df['Close'], df['Open'])])])
+                    fig2.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[0, v_ma]))
+                    st.plotly_chart(fig2, use_container_width=True)
+
+                with tab3:
+                    fig3 = go.Figure()
+                    fig3.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='#FF3232', width=2), name='K值'))
+                    fig3.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='#00AB5E', width=2), name='D值'))
+                    fig3.add_hline(y=80, line_dash="dash", line_color="gray"); fig3.add_hline(y=20, line_dash="dash", line_color="gray")
+                    fig3.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=))
+                    st.plotly_chart(fig3, use_container_width=True)
+
+                with tab4:
+                    m_ma = max(r_df['MACD_HIST'].abs().max(), r_df['DIF'].abs().max()) * 1.5
+                    fig4 = go.Figure()
+                    fig4.add_trace(go.Bar(x=df.index, y=df['MACD_HIST'], marker_color=['#FF3232' if h>=0 else '#00AB5E' for h in df['MACD_HIST']]))
+                    fig4.add_trace(go.Scatter(x=df.index, y=df['DIF'], line=dict(color='yellow', width=1.5), name='DIF'))
+                    fig4.add_trace(go.Scatter(x=df.index, y=df['DEA'], line=dict(color='cyan', width=1.5), name='DEA'))
+                    fig4.update_layout(height=400, showlegend=False, margin=dict(l=5, r=5, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[-m_ma, m_ma]))
+                    st.plotly_chart(fig4, use_container_width=True)
+
+                with tab5:
+                    b_ma = r_df['BIAS'].abs().max() * 1.5
+                    fig5 = go.Figure(data=[go.Scatter(x=df.index, y=df['BIAS'], line=dict(color='#FFD700', width=2))])
+                    fig5.add_hline(y=0, line_color="white")
+                    fig5.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[-b_ma, b_ma]))
+                    st.plotly_chart(fig5, use_container_width=True)
+
+                # --- 最終操作指引 ---
                 st.divider()
-                # --- 最終對策白話文優化 ---
                 st.subheader("💡 實戰操作指引")
                 score = (1 if k_v < 50 else 0) + (1 if macd_h > 0 else 0) + (1 if lp > ma5_v else 0)
-                
                 if score >= 2:
-                    st.success(f"**【 強勢進攻訊號 】**")
-                    st.write(f"👉 **操作**：目前處於上升軌道，不急著賣。目標價設定在 **{wave_target:.2f}** 元。")
-                    st.write(f"👉 **心法**：只要收盤沒跌破 **{ma5_v:.2f}** (5日線)，就繼續抱著讓利潤奔跑！")
+                    st.success("**【 強勢進攻訊號 】**")
+                    st.write(f"👉 **操作**：氣勢正旺，目標看 **{wave_target:.2f}** 元。沒破 **{ma5_v:.2f}** 就續抱讓利潤奔跑。")
                 elif score <= 0:
-                    st.error(f"**【 趨勢轉弱訊號 】**")
-                    st.write(f"👉 **操作**：氣氛轉冷，若已持股且跌破 **{stop_l:.2f}** 務必撤離。")
-                    st.write(f"👉 **心法**：空手者不要去接掉下來的刀子，等站回 5 日線再說。")
+                    st.error("**【 趨勢轉弱訊號 】**")
+                    st.write(f"👉 **建議**：氣氛轉冷，跌破 **{supp_10 * 0.99:.2f}** 務必逃命，不要留戀。")
                 else:
-                    st.warning(f"**【 震盪整理訊號 】**")
-                    st.write(f"👉 **操作**：沒有方向，適合在 **{supp_10:.2f}** 與 **{resi_10:.2f}** 之間低買高賣。")
+                    st.warning("**【 震盪整理訊號 】**")
+                    st.write(f"👉 **策略**：沒有方向，適合在 **{supp_10:.2f}** 與 **{resi_10:.2f}** 之間玩短打。")
 
-        except Exception as e: st.error(f"錯誤：{e}")
+        except Exception as e: st.error(f"分析異常：{e}")
+
+st.caption("v6.6 | 全方位視覺修正版")
