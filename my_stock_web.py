@@ -32,7 +32,7 @@ st.divider()
 
 if analyze_btn or stock_id:
     sid = stock_id.upper().strip()
-    with st.spinner(f'數據優化中...'):
+    with st.spinner(f'策略數據分析中...'):
         try:
             # 搜尋邏輯
             formatted_id = f"{sid}.TW" if sid.isdigit() else sid
@@ -47,8 +47,7 @@ if analyze_btn or stock_id:
                 df['MA5'] = df['Close'].rolling(5).mean()
                 df['MA20'] = df['Close'].rolling(20).mean()
                 df['BIAS'] = ((df['Close'] - df['MA20']) / df['MA20']) * 100
-                low_9, high_9 = df['Low'].rolling(9).min(), df['High'].rolling(9).max()
-                df['K'] = ((df['Close'] - low_9) / (high_9 - low_9) * 100).ewm(com=2, adjust=False).mean()
+                df['K'] = ((df['Close'] - df['Low'].rolling(9).min()) / (df['High'].rolling(9).max() - df['Low'].rolling(9).min()) * 100).ewm(com=2, adjust=False).mean()
                 df['D'] = df['K'].rolling(3).mean()
                 ema12, ema26 = df['Close'].ewm(span=12).mean(), df['Close'].ewm(span=26).mean()
                 df['DIF'] = ema12 - ema26
@@ -58,7 +57,7 @@ if analyze_btn or stock_id:
 
                 # 最新數據
                 lp = float(df['Close'].iloc[-1])
-                ma5_v, ma20_v = float(df['MA5'].iloc[-1]), float(df['MA20'].iloc[-1])
+                ma5_v = float(df['MA5'].iloc[-1])
                 k_v, macd_h, bias_v = float(df['K'].iloc[-1]), float(df['MACD_HIST'].iloc[-1]), float(df['BIAS'].iloc[-1])
                 supp_10, resi_10 = float(df['Low'].tail(10).min()), float(df['High'].tail(10).max())
                 stock_name = get_real_chinese_name(sid)
@@ -73,10 +72,10 @@ if analyze_btn or stock_id:
                 c3.metric("🎯 賣點", f"{wave_target:.2f}")
                 c4.metric("🚨 停損", f"{supp_10 * 0.99:.2f}")
 
-                # --- 核心：圖表顯示區 (限制 X 軸範圍為 45 天) ---
+                # --- 圖表顯示區 (修正 X 軸與 Y 軸錯誤) ---
                 tab1, tab2, tab3, tab4, tab5 = st.tabs(["K線", "量能", "KD", "MACD", "乖離"])
                 last_date = df.index[-1]
-                start_date = last_date - pd.Timedelta(days=45) # 手機版顯示 45 天最清晰
+                start_date = last_date - pd.Timedelta(days=45) 
                 r_df = df[df.index >= start_date]
 
                 with tab1:
@@ -97,8 +96,10 @@ if analyze_btn or stock_id:
                     fig3 = go.Figure()
                     fig3.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='#FF3232', width=2), name='K值'))
                     fig3.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='#00AB5E', width=2), name='D值'))
-                    fig3.add_hline(y=80, line_dash="dash", line_color="gray"); fig3.add_hline(y=20, line_dash="dash", line_color="gray")
-                    fig3.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=))
+                    fig3.add_hline(y=80, line_dash="dash", line_color="gray")
+                    fig3.add_hline(y=20, line_dash="dash", line_color="gray")
+                    # 【修正處】補上 [0, 100] 數值
+                    fig3.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[0, 100]))
                     st.plotly_chart(fig3, use_container_width=True)
 
                 with tab4:
@@ -111,7 +112,7 @@ if analyze_btn or stock_id:
                     st.plotly_chart(fig4, use_container_width=True)
 
                 with tab5:
-                    b_ma = r_df['BIAS'].abs().max() * 1.5
+                    b_ma = r_df['BIAS'].abs().max() * 1.4
                     fig5 = go.Figure(data=[go.Scatter(x=df.index, y=df['BIAS'], line=dict(color='#FFD700', width=2))])
                     fig5.add_hline(y=0, line_color="white")
                     fig5.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[-b_ma, b_ma]))
@@ -122,15 +123,15 @@ if analyze_btn or stock_id:
                 st.subheader("💡 實戰操作指引")
                 score = (1 if k_v < 50 else 0) + (1 if macd_h > 0 else 0) + (1 if lp > ma5_v else 0)
                 if score >= 2:
-                    st.success("**【 強勢進攻訊號 】**")
-                    st.write(f"👉 **操作**：氣勢正旺，目標看 **{wave_target:.2f}** 元。沒破 **{ma5_v:.2f}** 就續抱讓利潤奔跑。")
+                    st.success(f"**【 強勢進攻訊號 】**")
+                    st.write(f"👉 **操作**：氣勢正旺，目標看 **{wave_target:.2f}** 元。沒破 **{ma5_v:.2f}** 就續抱。")
                 elif score <= 0:
-                    st.error("**【 趨勢轉弱訊號 】**")
-                    st.write(f"👉 **建議**：氣氛轉冷，跌破 **{supp_10 * 0.99:.2f}** 務必逃命，不要留戀。")
+                    st.error(f"**【 趨勢轉弱訊號 】**")
+                    st.write(f"👉 **建議**：跌破 **{supp_10 * 0.99:.2f}** 務必保命撤離。")
                 else:
                     st.warning("**【 震盪整理訊號 】**")
-                    st.write(f"👉 **策略**：沒有方向，適合在 **{supp_10:.2f}** 與 **{resi_10:.2f}** 之間玩短打。")
+                    st.write(f"👉 **策略**：建議於 **{supp_10:.2f}** 與 **{resi_10:.2f}** 之間操作。")
 
         except Exception as e: st.error(f"分析異常：{e}")
 
-st.caption("v6.6 | 全方位視覺修正版")
+st.caption("v6.7 | 語法修正與手機視覺優化版")
