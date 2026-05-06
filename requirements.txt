@@ -1,6 +1,3 @@
-pandas
+streamlit
 yfinance
-pandas_ta
-plotly
-beautifulsoup4
-requests
+pandas
