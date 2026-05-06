@@ -7,17 +7,15 @@ import requests
 # --- 1. 網頁基礎配置 ---
 st.set_page_config(page_title="小白股票診療室 Pro", layout="wide")
 
-# --- 2. 常用台股資料庫 (包含熱門股、ETF、債券ETF) ---
+# --- 2. 常用台股資料庫 ---
 STOCK_DB = {
-    "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2382": "廣達", 
-    "0050": "元大台灣50", "0056": "元大高股息", "00878": "國泰永續高股息",
-    "00929": "復華台灣科技優息", "00919": "群益台灣精選高息", "00679B": "元大美債20年",
-    "00937B": "群益ESG投等債20+", "2314": "台揚", "2313": "金像電"
+    "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "0050": "元大台灣50",
+    "00878": "國泰高股息", "00929": "復華科技優息", "00679B": "元大美債20年",
+    "00937B": "群益ESG投等債20+", "00992B": "統一美債20年"
 }
 
 def get_real_chinese_name(symbol):
-    # 去除後綴以便對照資料庫
-    clean_sid = symbol.replace(".TW", "").replace(".TWO", "")
+    clean_sid = symbol.split('.')[0].upper()
     if clean_sid in STOCK_DB: return STOCK_DB[clean_sid]
     try:
         url = f"https://yahoo.com{symbol}"
@@ -32,52 +30,58 @@ def get_real_chinese_name(symbol):
 
 # --- 3. 側邊欄導航 ---
 st.sidebar.header("🏥 診斷中心")
-
-# 新增：熱門股快速選單
 quick_select = st.sidebar.selectbox(
     "🔥 熱門標的快速選單",
-    ["手動輸入代號", "2330 台積電", "2317 鴻海", "00878 國泰高股息", "00929 復華科技優息", "00679B 元大美債", "00937B 群益債券"]
+    ["手動輸入代號", "2330 台積電", "2317 鴻海", "00878 國泰高股息", "00679B 元大美債", "00937B 群益債券", "00992B 統一美債"]
 )
 
-# 根據選單決定輸入框預設值
-default_id = "2330"
-if quick_select != "手動輸入代號":
-    default_id = quick_select.split(' ')[0]
-
+default_id = quick_select.split(' ')[0] if quick_select != "手動輸入代號" else "2330"
 stock_id = st.sidebar.text_input("請輸入台股/美股/ETF代號：", default_id)
 analyze_btn = st.sidebar.button("開始深度分析", type="primary")
 
 # --- 4. 主畫面邏輯 ---
 if analyze_btn or stock_id:
-    # 【強大代號轉換邏輯】支援 2330, 00878, 00992B, TSLA 等
     sid = stock_id.upper().strip()
-    if sid.endswith(".TW") or sid.endswith(".TWO") or sid.endswith(".US") or sid.startswith("^"):
-        formatted_id = sid
-    elif sid.isalpha() and len(sid) >= 2: # 純英文當美股
-        formatted_id = sid
-    else: # 包含數字或字母(如00992B)通通當台股
-        formatted_id = f"{sid}.TW"
     
-    with st.spinner(f'系統深度計算中...'):
+    with st.spinner(f'系統正在為您搜尋 {sid} 的歷史數據...'):
         try:
-            # 優先查上市(.TW)，查不到自動補查上櫃(.TWO)
-            df = yf.download(formatted_id, period="1y", interval="1d", progress=False)
-            if df.empty and formatted_id.endswith(".TW"):
-                formatted_id = formatted_id.replace(".TW", ".TWO")
-                df = yf.download(formatted_id, period="1y", interval="1d", progress=False)
+            # 【核心修正：雙向搜尋邏輯】
+            df = pd.DataFrame()
+            
+            # A. 判斷格式
+            if sid.endswith(".TW") or sid.endswith(".TWO") or sid.endswith(".US") or sid.startswith("^"):
+                search_list = [sid]
+            elif sid.isalpha() and len(sid) >= 2: 
+                search_list = [sid] # 美股
+            else:
+                # 台股：債券ETF(B結尾)優先查 .TWO，其餘優先查 .TW
+                if sid.endswith("B"):
+                    search_list = [f"{sid}.TWO", f"{sid}.TW"]
+                else:
+                    search_list = [f"{sid}.TW", f"{sid}.TWO"]
+
+            # B. 執行循環搜尋直到找到資料
+            final_id = sid
+            for target_id in search_list:
+                df = yf.download(target_id, period="1y", interval="1d", progress=False)
+                if not df.empty:
+                    final_id = target_id
+                    break
             
             if df.empty:
-                st.error(f"🛑 查無數據。請確認代號【{stock_id}】是否正確。")
+                st.error(f"🛑 查無數據。請確認代號【{stock_id}】是否正確。債券型ETF建議輸入完整的 00992B")
             else:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
 
-                # --- 指標計算 ---
+                # 指標計算
                 df['MA20'] = df['Close'].rolling(20).mean()
                 df['BIAS'] = ((df['Close'] - df['MA20']) / df['MA20']) * 100
                 low_9, high_9 = df['Low'].rolling(9).min(), df['High'].rolling(9).max()
                 rsv = (df['Close'] - low_9) / (high_9 - low_9) * 100
                 df['K'] = rsv.ewm(com=2, adjust=False).mean()
+                
+                # MACD 計算
                 ema12 = df['Close'].ewm(span=12, adjust=False).mean()
                 ema26 = df['Close'].ewm(span=26, adjust=False).mean()
                 df['DIF'] = ema12 - ema26
@@ -89,10 +93,10 @@ if analyze_btn or stock_id:
                 bias = float(df['BIAS'].iloc[-1])
                 vol = int(df['Volume'].iloc[-1])
                 avg_vol = int(df['Volume'].tail(5).mean())
-                stock_name = get_real_chinese_name(formatted_id)
+                stock_name = get_real_chinese_name(final_id)
 
                 # --- 畫面呈現 ---
-                st.title(f"🏢 {stock_name} ({stock_id}) 專業診斷報告")
+                st.title(f"🏢 {stock_name} ({sid}) 專業診斷報告")
                 st.divider()
                 
                 m1, m2, m3, m4 = st.columns(4)
@@ -104,37 +108,30 @@ if analyze_btn or stock_id:
                 st.write("### 📝 四大指標綜合判斷")
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.info("**📈 技術與趨勢**")
-                    kd_t = "🔥 過熱：追高風險大。" if k_val > 80 else "❄️ 冷清：撿便宜時機。" if k_val < 20 else "✅ 正常：氣氛平穩。"
-                    st.write(f"● **KD 熱度**：{kd_t}")
-                    macd_t = "🚀 強勁：動能上升中。" if macd_h > 0 else "☁️ 轉弱：動能衰退中。"
-                    st.write(f"● **MACD 動能**：{macd_t}")
+                    st.info("**📈 技術趨勢分析**")
+                    st.write(f"● **KD 熱度**：{'🔥 過熱' if k_val > 80 else '❄️ 冷清' if k_val < 20 else '✅ 正常'}")
+                    st.write(f"● **MACD 動能**：{'🚀 強勁' if macd_h > 0 else '☁️ 轉弱'}")
                 with c2:
-                    st.info("**📊 量能與乖離**")
-                    vol_t = "💥 爆量：今日異常放量！" if vol > avg_vol * 1.5 else "☕ 平穩：成交量正常。"
-                    st.write(f"● **成交量 (VOL)**：{vol_t}")
-                    bias_t = "📏 過大：隨時可能校正。" if abs(bias) > 5 else "穩定：距離正常。"
-                    st.write(f"● **乖離率 (BIAS)**：{bias_t}")
+                    st.info("**📊 量能與乖離分析**")
+                    st.write(f"● **成交量 (VOL)**：{'💥 爆量' if vol > avg_vol * 1.5 else '☕ 平穩'}")
+                    st.write(f"● **乖離率 (BIAS)**：{'📏 過大' if abs(bias) > 5 else '穩定'}")
 
                 st.divider()
-                score = 0
-                if k_val < 30: score += 1
-                if macd_h > 0: score += 1
-                if lp > df['MA20'].iloc[-1]: score += 1
+                score = (1 if k_val < 30 else 0) + (1 if macd_h > 0 else 0) + (1 if lp > df['MA20'].iloc[-1] else 0)
                 
                 st.subheader("💡 系統最終建議")
-                if score >= 2: st.success("**【 綜合評等：強勢看多 】** 氣氛動能俱佳，適合偏多思考。")
-                elif score <= 0: st.error("**【 綜合評等：偏空觀望 】** 指標轉弱，不宜逆勢摸底。")
-                else: st.warning("**【 綜合評等：區間盤整 】** 多空不明，建議高賣低買。")
+                if score >= 2: st.success("**【 綜合評等：強勢看多 】** 適合偏多思考。")
+                elif score <= 0: st.error("**【 綜合評等：偏空觀望 】** 不宜逆勢摸底。")
+                else: st.warning("**【 綜合評等：區間盤整 】** 建議低買高賣。")
 
-                st.write("### 📈 走勢圖表")
+                st.write("### 📈 股價走勢圖")
                 fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線')])
                 fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='月線'))
                 fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=0, b=0))
                 st.plotly_chart(fig, use_container_width=True)
 
         except Exception as e:
-            st.error(f"分析異常：{e}")
+            st.error(f"分析異常：請確認股號。若為債券ETF請輸入如 00679B")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("小白股票診療室 v3.2 | 快速選單全能版")
+st.sidebar.caption("小白股票診療室 v3.3 | 債券ETF修復版")
