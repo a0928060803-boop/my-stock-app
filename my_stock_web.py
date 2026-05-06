@@ -46,7 +46,6 @@ if analyze_btn or stock_id:
     with st.spinner(f'系統正在為您搜尋 {sid} 的歷史數據...'):
         try:
             df = pd.DataFrame()
-            # 判斷搜尋清單
             if sid.endswith(".TW") or sid.endswith(".TWO") or sid.endswith(".US") or sid.startswith("^"):
                 search_list = [sid]
             elif sid.isalpha() and len(sid) >= 2: 
@@ -95,6 +94,29 @@ if analyze_btn or stock_id:
                 m3.metric("MACD 動能", f"{macd_h:.2f}")
                 m4.metric("乖離率 BIAS", f"{bias:.1f}%")
 
+                # --- 圖表顯示優化 ---
+                st.write("### 📈 股價走勢圖 (自動優化比例)")
+                fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線')])
+                fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='月線'))
+                
+                # 設定時間軸範圍 (最近 45 天)
+                last_date = df.index[-1]
+                start_date = last_date - pd.Timedelta(days=45)
+                
+                # 智慧縮放 Y 軸：找出顯示區間內的最高價與最低價
+                recent_data = df[df.index >= start_date]
+                y_min = recent_data['Low'].min() * 0.97 # 下留 3% 空間
+                y_max = recent_data['High'].max() * 1.03 # 上留 3% 空間
+                
+                fig.update_layout(
+                    height=500, 
+                    xaxis_rangeslider_visible=False, 
+                    margin=dict(l=0, r=0, t=0, b=0),
+                    xaxis=dict(range=[start_date, last_date]),
+                    yaxis=dict(range=[y_min, y_max], autorange=False, fixedrange=False) # 強制修正 Y 軸比例
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
                 st.write("### 📝 指標綜合判斷")
                 c1, c2 = st.columns(2)
                 with c1:
@@ -107,31 +129,14 @@ if analyze_btn or stock_id:
                     st.write(f"● **乖離率**：{'📏 過大' if abs(bias) > 5 else '穩定'}")
 
                 st.divider()
-                # --- 圖表顯示優化：設定預設顯示範圍為一個月 ---
-                st.write("### 📈 股價走勢圖 (預設顯示最近一月)")
-                fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線')])
-                fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='月線'))
-                
-                # 設定時間軸範圍
-                last_date = df.index[-1]
-                start_date = last_date - pd.Timedelta(days=45) # 包含假日約一個月
-                
-                fig.update_layout(
-                    height=500, 
-                    xaxis_rangeslider_visible=False, 
-                    margin=dict(l=0, r=0, t=0, b=0),
-                    xaxis=dict(range=[start_date, last_date]) # 關鍵：鎖定初始範圍
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
                 score = (1 if k_val < 30 else 0) + (1 if macd_h > 0 else 0) + (1 if lp > df['MA20'].iloc[-1] else 0)
                 st.subheader("💡 系統最終建議")
-                if score >= 2: st.success("**【 綜合評等：強勢看多 】** 氣氛動能俱佳。")
+                if score >= 2: st.success("**【 綜合評等：強勢看多 】** 適合偏多思考。")
                 elif score <= 0: st.error("**【 綜合評等：偏空觀望 】** 指標轉弱，不宜逆勢。")
                 else: st.warning("**【 綜合評等：區間盤整 】** 多空不明，低買高賣。")
 
         except Exception as e:
-            st.error(f"分析異常，請確認代號格式是否正確。")
+            st.error(f"分析異常，原因：{e}")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("小白股票診療室 v3.4 | 視覺優化版")
+st.sidebar.caption("小白股票診療室 v3.5 | 視覺完美版")
