@@ -94,26 +94,28 @@ if analyze_btn or stock_id:
                 m3.metric("MACD 動能", f"{macd_h:.2f}")
                 m4.metric("乖離率 BIAS", f"{bias:.1f}%")
 
-                # --- 圖表顯示優化 ---
-                st.write("### 📈 股價走勢圖 (自動優化比例)")
-                fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線')])
+                # --- 圖表顯示優化 (台股紅漲綠跌) ---
+                st.write("### 📈 股價走勢圖 (紅漲綠跌版)")
+                fig = go.Figure(data=[go.Candlestick(
+                    x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線',
+                    increasing_line_color='#FF3232', increasing_fill_color='#FF3232', # 紅色上漲
+                    decreasing_line_color='#00AB5E', decreasing_fill_color='#00AB5E'  # 綠色下跌
+                )])
                 fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='月線'))
                 
-                # 設定時間軸範圍 (最近 45 天)
+                # 設定時間軸與 Y 軸智慧縮放
                 last_date = df.index[-1]
                 start_date = last_date - pd.Timedelta(days=45)
-                
-                # 智慧縮放 Y 軸：找出顯示區間內的最高價與最低價
                 recent_data = df[df.index >= start_date]
-                y_min = recent_data['Low'].min() * 0.97 # 下留 3% 空間
-                y_max = recent_data['High'].max() * 1.03 # 上留 3% 空間
+                y_min = recent_data['Low'].min() * 0.97
+                y_max = recent_data['High'].max() * 1.03
                 
                 fig.update_layout(
                     height=500, 
                     xaxis_rangeslider_visible=False, 
                     margin=dict(l=0, r=0, t=0, b=0),
                     xaxis=dict(range=[start_date, last_date]),
-                    yaxis=dict(range=[y_min, y_max], autorange=False, fixedrange=False) # 強制修正 Y 軸比例
+                    yaxis=dict(range=[y_min, y_max], autorange=False, fixedrange=False)
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -132,11 +134,11 @@ if analyze_btn or stock_id:
                 score = (1 if k_val < 30 else 0) + (1 if macd_h > 0 else 0) + (1 if lp > df['MA20'].iloc[-1] else 0)
                 st.subheader("💡 系統最終建議")
                 if score >= 2: st.success("**【 綜合評等：強勢看多 】** 適合偏多思考。")
-                elif score <= 0: st.error("**【 綜合評等：偏空觀望 】** 指標轉弱，不宜逆勢。")
-                else: st.warning("**【 綜合評等：區間盤整 】** 多空不明，低買高賣。")
+                elif score <= 0: st.error("**【 綜合評等：偏空觀望 】** 不宜逆勢摸底。")
+                else: st.warning("**【 綜合評等：區間盤整 】** 建議低買高賣。")
 
         except Exception as e:
             st.error(f"分析異常，原因：{e}")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("小白股票診療室 v3.5 | 視覺完美版")
+st.sidebar.caption("小白股票診療室 v3.6 | 台股配色版")
