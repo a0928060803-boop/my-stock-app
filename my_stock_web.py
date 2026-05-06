@@ -35,7 +35,7 @@ quick_select = st.selectbox(
 if quick_select != "手動輸入代號":
     default_id = quick_select.split(' ')[0]
 else:
-    default_id = "2634"
+    default_id = "2330"
 
 col_input, col_btn = st.columns([3, 1])
 with col_input:
@@ -75,6 +75,7 @@ if analyze_btn or stock_id:
                 low_9, high_9 = df['Low'].rolling(9).min(), df['High'].rolling(9).max()
                 rsv = (df['Close'] - low_9) / (high_9 - low_9) * 100
                 df['K'] = rsv.ewm(com=2, adjust=False).mean()
+                df['D'] = df['K'].ewm(com=2, adjust=False).mean()
                 ema12 = df['Close'].ewm(span=12, adjust=False).mean()
                 ema26 = df['Close'].ewm(span=26, adjust=False).mean()
                 df['DIF'] = ema12 - ema26
@@ -89,16 +90,9 @@ if analyze_btn or stock_id:
                 avg_vol = int(df['Volume'].tail(5).mean())
                 stock_name = get_real_chinese_name(final_id)
 
-                # 顯示標題
                 st.subheader(f"🏢 {stock_name} ({sid}) 診斷報告")
                 
-                # 數據摘要卡片
-                m1, m2, m3 = st.columns(3)
-                m1.metric("目前價格", f"{lp:.2f}", f"{lp - df['Close'].iloc[-2]:.2f}")
-                m2.metric("KD 熱度", f"{k_val:.1f}")
-                m3.metric("乖離率 BIAS", f"{bias:.1f}%")
-
-                # --- 圖表分頁 ---
+                # --- 圖表分頁顯示 ---
                 tab1, tab2, tab3, tab4, tab5 = st.tabs(["K線", "量能", "KD", "MACD", "乖離"])
                 last_date = df.index[-1]
                 start_date = last_date - pd.Timedelta(days=60)
@@ -114,51 +108,57 @@ if analyze_btn or stock_id:
                                       xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[y_min, y_max]))
                     st.plotly_chart(fig1, use_container_width=True)
 
+                with tab2:
+                    v_max = recent_df['Volume'].max() * 1.1
+                    fig2 = go.Figure(data=[go.Bar(x=df.index, y=df['Volume'], marker_color=['#FF3232' if c>=o else '#00AB5E' for c,o in zip(df['Close'], df['Open'])])])
+                    fig2.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[0, v_max]))
+                    st.plotly_chart(fig2, use_container_width=True)
+
+                with tab3:
+                    fig3 = go.Figure()
+                    fig3.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='#FF3232', width=2), name='K值'))
+                    fig3.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='#00AB5E', width=2), name='D值'))
+                    fig3.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[0, 100]))
+                    st.plotly_chart(fig3, use_container_width=True)
+
                 with tab4:
-                    h_col = "#FF3232" if macd_h >= 0 else "#00AB5E"
-                    st.markdown(f"**MACD >** DIF: {df['DIF'].iloc[-1]:.2f} / <span style='color:{h_col}'>柱狀體: {macd_h:.2f}</span>", unsafe_allow_html=True)
+                    st.markdown(f"**MACD >** DIF: {df['DIF'].iloc[-1]:.2f} / HIST: {macd_h:.2f}")
                     max_abs = max(recent_df['MACD_HIST'].abs().max(), recent_df['DIF'].abs().max()) * 1.4
                     fig4 = go.Figure()
                     fig4.add_trace(go.Bar(x=df.index, y=df['MACD_HIST'], marker_color=['#FF3232' if h>=0 else '#00AB5E' for h in df['MACD_HIST']]))
                     fig4.add_trace(go.Scatter(x=df.index, y=df['DIF'], line=dict(color='yellow', width=1.5)))
-                    fig4.update_layout(height=350, showlegend=False, margin=dict(l=5, r=5, t=10, b=0), 
-                                      xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[-max_abs, max_abs]))
+                    fig4.update_layout(height=350, showlegend=False, margin=dict(l=5, r=5, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[-max_abs, max_abs]))
                     st.plotly_chart(fig4, use_container_width=True)
-                
-                # (其餘 Tab 2, 3, 5 省略以精簡回覆，請保留原本邏輯)
 
-                # --- 核心：新增線圖分析報告與買賣建議 ---
+                with tab5:
+                    b_max = recent_df['BIAS'].abs().max() * 1.4
+                    fig5 = go.Figure(data=[go.Scatter(x=df.index, y=df['BIAS'], line=dict(color='#FFD700', width=2))])
+                    fig5.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[-b_max, b_max]))
+                    st.plotly_chart(fig5, use_container_width=True)
+
+                # --- 綜合分析報告與建議 ---
                 st.divider()
                 st.write("### 📝 四大指標綜合分析報告")
                 c1, c2 = st.columns(2)
-                
                 with c1:
                     st.info("**📈 趨勢與動能 (KD / MACD)**")
-                    kd_desc = "🔥 市場過熱：容易追高，不宜在此刻大筆買入。" if k_val > 80 else "❄️ 市場冷清：買氣低迷，適合耐心撿便宜。" if k_val < 20 else "✅ 熱度穩定：目前情緒平衡，適合波段操作。"
-                    st.write(f"● **KD 指標**：{kd_desc}")
-                    macd_desc = "🚀 動能增強：紅柱擴大中，股價具有攻擊力道。" if macd_h > 0 else "☁️ 動能衰退：趨勢轉弱，應提防拉回風險。"
-                    st.write(f"● **MACD 指標**：{macd_desc}")
-
+                    st.write(f"● **KD 指標**：{'🔥 市場過熱，不宜追高' if k_val > 80 else '❄️ 市場冷清，適合撿便宜' if k_val < 20 else '✅ 熱度穩定，適合操作'}")
+                    st.write(f"● **MACD 指標**：{'🚀 動能增強，具有攻擊力' if macd_h > 0 else '☁️ 動能衰退，防拉回'}")
                 with c2:
                     st.info("**📊 量能與乖離 (VOL / BIAS)**")
-                    vol_desc = "💥 異常爆量：成交量顯著放大，通常是主力進場或關鍵轉折。" if vol > avg_vol * 1.5 else "☕ 量能平穩：目前沒有明顯的大戶進出跡象。"
-                    st.write(f"● **成交量 (VOL)**：{vol_desc}")
-                    bias_desc = "📏 乖離過大：股價離月線太遠，近期可能會有「吸回」月線的校正。" if abs(bias) > 5 else "穩定：與月線距離適中，趨勢健康。"
-                    st.write(f"● **乖離率 (BIAS)**：{bias_desc}")
+                    st.write(f"● **成交量**：{'💥 異常爆量，關鍵轉折' if vol > avg_vol * 1.5 else '☕ 量能平穩，正常交易'}")
+                    st.write(f"● **乖離率**：{'📏 乖離過大，近期校正' if abs(bias) > 5 else '穩定，趨勢健康'}")
 
-                # --- 最終操作建議 ---
                 st.subheader("💡 最終投資建議與對策")
                 score = (1 if k_val < 30 else 0) + (1 if macd_h > 0 else 0) + (1 if lp > df['MA20'].iloc[-1] else 0)
-                
-                # 計算具體的建議內容
                 if score >= 2:
-                    st.success("**【 診斷結果：強勢格局，建議購入/續抱 】**\n\n目前的各項數據顯示趨勢與動能均偏向多方。建議可於 5 日線附近分批布局，或持有現有部位看目標壓力區。")
+                    st.success("**【 診斷結果：強勢格局，建議購入/續抱 】**")
                 elif score <= 0:
-                    st.error("**【 診斷結果：趨勢轉弱，建議賣出/觀望 】**\n\n指標顯示買盤縮手，股價結構受損。若已持股建議先行減碼，空手者則不宜在此刻摸底。")
+                    st.error("**【 診斷結果：趨勢轉弱，建議賣出/觀望 】**")
                 else:
-                    st.warning("**【 診斷結果：區間震盪，建議中性看待 】**\n\n目前多空拉鋸，沒有明顯單向趨勢。建議維持輕倉，利用「低買高賣」策略在支撐與壓力區間進行操作。")
+                    st.warning("**【 診斷結果：區間震盪，建議中性看待 】**")
 
         except Exception as e:
             st.error(f"分析異常。")
 
-st.caption("v5.1 | 完整診斷分析版")
+st.caption("v5.2 | 功能全整合版")
