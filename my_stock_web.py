@@ -34,7 +34,7 @@ analyze_btn = st.sidebar.button("開始深度分析", type="primary")
 # --- 4. 主畫面邏輯 ---
 if analyze_btn or stock_id:
     sid = stock_id.upper().strip()
-    with st.spinner(f'診斷中...'):
+    with st.spinner(f'數據診療中...'):
         try:
             df = pd.DataFrame()
             if any(ext in sid for ext in [".TW", ".TWO", ".US", "^"]):
@@ -68,10 +68,8 @@ if analyze_btn or stock_id:
                 df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
                 df['MACD_HIST'] = df['DIF'] - df['DEA']
 
-                # 提取最新數值用於顯示
-                last_dif = df['DIF'].iloc[-1]
-                last_dea = df['DEA'].iloc[-1]
-                last_hist = df['MACD_HIST'].iloc[-1]
+                # 提取最新數值
+                last_dif, last_dea, last_hist = df['DIF'].iloc[-1], df['DEA'].iloc[-1], df['MACD_HIST'].iloc[-1]
 
                 # 設定區間
                 last_date = df.index[-1]
@@ -90,7 +88,7 @@ if analyze_btn or stock_id:
                                         decreasing_line_color='#00AB5E', decreasing_fillcolor='#00AB5E')])
                     fig1.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='月線'))
                     fig1.update_layout(height=450, xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=10, b=0),
-                                      xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[y_min, y_max]))
+                                      xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[y_min, y_max], fixedrange=False))
                     st.plotly_chart(fig1, use_container_width=True)
 
                 with tab2:
@@ -107,24 +105,27 @@ if analyze_btn or stock_id:
                     st.plotly_chart(fig3, use_container_width=True)
 
                 with tab4:
-                    # --- MACD 專業標籤顯示區 ---
+                    # --- MACD 專業顯示區 ---
                     h_col = "#FF3232" if last_hist >= 0 else "#00AB5E"
                     st.markdown(f"**MACD(12,26,9) >** <span style='color:yellow'>DIF: {last_dif:.2f}</span>  <span style='color:cyan'>DEA: {last_dea:.2f}</span>  <span style='color:{h_col}'>HIST: {last_hist:.2f}</span>", unsafe_allow_html=True)
                     
-                    m_val = max(abs(recent_df['MACD_HIST'].min()), abs(recent_df['MACD_HIST'].max()), abs(recent_df['DIF'].max()), abs(recent_df['DEA'].max())) * 1.2
+                    # 智慧 Y 軸：同時計算柱狀體與曲線
+                    max_abs = max(recent_df['MACD_HIST'].abs().max(), recent_df['DIF'].abs().max(), recent_df['DEA'].abs().max())
+                    m_range = max_abs * 1.4 if max_abs > 0 else 1.0
+                    
                     fig4 = go.Figure()
                     fig4.add_trace(go.Bar(x=df.index, y=df['MACD_HIST'], marker_color=['#FF3232' if h>=0 else '#00AB5E' for h in df['MACD_HIST']]))
                     fig4.add_trace(go.Scatter(x=df.index, y=df['DIF'], line=dict(color='yellow', width=1.5)))
                     fig4.add_trace(go.Scatter(x=df.index, y=df['DEA'], line=dict(color='cyan', width=1.5)))
-                    fig4.update_layout(height=400, showlegend=False, margin=dict(l=5, r=5, t=10, b=0), 
+                    fig4.update_layout(height=450, showlegend=False, margin=dict(l=5, r=5, t=10, b=0), 
                                       xaxis=dict(range=[start_date, last_date], showgrid=False), 
-                                      yaxis=dict(range=[-m_val, m_val], gridcolor='#333'))
+                                      yaxis=dict(range=[-m_range, m_range], gridcolor='#333', zerolinecolor='white'))
                     st.plotly_chart(fig4, use_container_width=True)
                 
                 with tab5:
-                    b_val = max(abs(recent_df['BIAS'].min()), abs(recent_df['BIAS'].max())) * 1.3
+                    b_max = recent_df['BIAS'].abs().max() * 1.4
                     fig5 = go.Figure(data=[go.Scatter(x=df.index, y=df['BIAS'], line=dict(color='#FFD700', width=2))])
-                    fig5.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[-b_val, b_val]))
+                    fig5.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[-b_max, b_max]))
                     st.plotly_chart(fig5, use_container_width=True)
 
                 st.divider()
@@ -138,4 +139,4 @@ if analyze_btn or stock_id:
         except Exception as e:
             st.error(f"分析異常。")
 
-st.sidebar.caption("小白股票診療室 v4.4 | 專業標籤版")
+st.sidebar.caption("小白股票診療室 v4.5 | 終極視覺版")
