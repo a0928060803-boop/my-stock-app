@@ -4,4 +4,3 @@ pandas
 plotly
 beautifulsoup4
 requests
-git+https://github.com
