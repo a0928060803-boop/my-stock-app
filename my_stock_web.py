@@ -3,31 +3,40 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 import requests
-from bs4 import BeautifulSoup
 
 # --- 網頁配置 ---
 st.set_page_config(page_title="小白股票診療室 Pro", layout="wide")
 
-# --- [核心更新] 強力中文股名爬蟲 ---
-def get_chinese_name(symbol):
+# --- [終極方案] 內建常用台股中文對照表 ---
+# 這樣熱門股絕對不會出現英文
+STOCK_DB = {
+    "2317": "鴻海", "2330": "台積電", "2454": "聯發科", "2303": "聯電", 
+    "2382": "廣達", "2313": "金像電", "2603": "長榮", "2609": "陽明",
+    "2615": "萬海", "2881": "富邦金", "2882": "國泰金", "2308": "台達電",
+    "2357": "華碩", "2409": "友達", "3481": "群創", "2324": "仁寶",
+    "2314": "台揚", "2618": "長榮航", "2610": "華航", "1101": "台泥"
+}
+
+def get_real_chinese_name(symbol):
+    # 1. 先從內建資料庫找
+    if symbol in STOCK_DB:
+        return STOCK_DB[symbol]
+    
+    # 2. 如果找不到，利用 Yahoo Finance 的查詢 API (較穩定)
     try:
-        # 爬取 Yahoo 股市個股頁面
-        url = f"https://yahoo.com{symbol}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # 尋找 H1 標籤 (Yahoo 股名的位置)
-        h1_text = soup.find('h1').text.strip()
-        
-        # 如果內容是 "鴻海 2317" 或 "鴻海 (2317)"，只切出中文部分
-        # 我們用空格或左括號來切分
-        clean_name = h1_text.split(' ')[0].split('(')[0]
-        return clean_name
+        url = f"https://yahoo.com{symbol}.TW"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers).json()
+        # 嘗試從搜尋結果中抓取 shortname
+        if res.get('quotes'):
+            name = res['quotes'][0].get('shortname', symbol)
+            # 過濾掉英文後綴
+            for s in ["Semiconductor", "Manufacturing", "Industry", "Co.", "Ltd."]:
+                name = name.replace(s, "").strip()
+            return name
     except:
-        return symbol
+        pass
+    return symbol
 
 # --- 側邊欄 ---
 st.sidebar.header("🔍 診斷中心")
@@ -40,10 +49,10 @@ if analyze_btn or stock_id:
     
     with st.spinner(f'正在分析 {stock_id} ...'):
         try:
-            # 1. 抓取中文名稱
-            stock_name = get_chinese_name(stock_id)
+            # 1. 取得名稱
+            stock_name = get_real_chinese_name(stock_id)
             
-            # 2. 獲取股價數據
+            # 2. 獲取數據
             df = yf.download(formatted_id, period="1y", interval="1d", progress=False)
             
             if df.empty:
@@ -52,22 +61,18 @@ if analyze_btn or stock_id:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
 
-                # 顯示標題 (這下一定是中文了！)
+                # 顯眼標題
                 st.title(f"🏢 {stock_name} ({stock_id}) 診斷報告")
                 st.divider()
 
                 # 3. 指標計算
                 df['MA20'] = df['Close'].rolling(window=20).mean()
-                low_9 = df['Low'].rolling(window=9).min()
-                high_9 = df['High'].rolling(window=9).max()
+                low_9, high_9 = df['Low'].rolling(9).min(), df['High'].rolling(9).max()
                 rsv = (df['Close'] - low_9) / (high_9 - low_9) * 100
                 df['K'] = rsv.ewm(com=2, adjust=False).mean()
                 
-                lp = float(df['Close'].iloc[-1])
-                k_val = float(df['K'].iloc[-1])
-                m20 = float(df['MA20'].iloc[-1])
-                supp = float(df['Low'].tail(20).min())
-                resi = float(df['High'].tail(20).max())
+                lp, k_val, m20 = float(df['Close'].iloc[-1]), float(df['K'].iloc[-1]), float(df['MA20'].iloc[-1])
+                supp, resi = float(df['Low'].tail(20).min()), float(df['High'].tail(20).max())
 
                 # 4. 數據儀表板
                 col_a, col_b, col_c = st.columns(3)
@@ -85,15 +90,15 @@ if analyze_btn or stock_id:
                 st.write("### 📝 醫生診斷說明")
                 c1, c2 = st.columns(2)
                 with c1:
-                    if lp > m20: st.success(f"**趨勢：強勢格局**\n\n股價在月線({m20:.1f})之上，氣氛很好。")
-                    else: st.error(f"**趨勢：偏弱格局**\n\n股價跌破月線，請觀察地板價 {supp:.1f}。")
+                    if lp > m20: st.success(f"**趨勢：強勢格局**\n\n股價在月線({m20:.1f})之上，大家看好。")
+                    else: st.error(f"**趨勢：偏弱格局**\n\n股價跌破月線，請看地板價 {supp:.1f}。")
                 with c2:
-                    if k_val > 80: st.warning(f"**熱度：太燙了**\n\nKD值 {k_val:.1f}，小心不要追高。")
-                    elif k_val < 20: st.success(f"**熱度：冷冰冰**\n\nKD值 {k_val:.1f}，適合進場撿便宜。")
-                    else: st.write(f"**熱度：常態**\n\nKD值 {k_val:.1f}，情緒平穩。")
+                    if k_val > 80: st.warning(f"**熱度：太燙了**\n\n現在大家都在搶買，小心追高風險。")
+                    elif k_val < 20: st.success(f"**熱度：冷冰冰**\n\n沒人要買，通常是撿便宜的好時機。")
+                    else: st.write(f"**熱度：常態**\n\n目前市場情緒平穩。")
 
         except Exception as e:
             st.error(f"發生錯誤：{e}")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("小白股票診療室 v2.7 | 中文名稱強化版")
+st.sidebar.caption("小白股票診療室 v2.8 | 終極中文名版本")
