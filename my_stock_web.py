@@ -1,29 +1,140 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
+import yfinance as yf
 import pandas as pd
+import plotly.graph_objects as go
+import requests
 
-# 建立連線
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- 1. 網頁配置 ---
+st.set_page_config(page_title="核心數據診斷終端", layout="centered")
 
-st.title("🚀 AI 雲端寫入測試")
+# --- 2. 常用資料庫 ---
+STOCK_DB = {"2330": "台積電", "2317": "鴻海", "2454": "聯發科", "0050": "元大台灣50", "00878": "國泰高股息", "2314": "台揚", "2634": "漢翔"}
 
-# 按下按鈕後，會多一行紀錄到你的表格
-if st.button("點我測試寫入表格"):
+def get_real_chinese_name(symbol):
     try:
-        # 1. 讀取現有資料
-        df = conn.read(ttl=0) 
-        
-        # 2. 準備新資料
-        new_data = pd.DataFrame([{
-            "日期": pd.Timestamp.now().strftime('%Y-%m-%d %H:%M'),
-            "股號": "TEST",
-            "建議動作": "測試成功"
-        }])
-        
-        # 3. 結合並上傳
-        updated_df = pd.concat([df, new_data], ignore_index=True)
-        conn.update(spreadsheet=st.secrets["connections"]["gsheets"]["spreadsheet"], data=updated_df)
-        
-        st.success("✅ 太棒了！請去打開你的 Google 表格，看看是不是多了一行？")
-    except Exception as e:
-        st.error(f"❌ 寫入失敗，請檢查 Secrets 設定：{e}")
+        clean_sid = symbol.upper().split('.')[0]
+        if clean_sid in STOCK_DB: return STOCK_DB[clean_sid]
+        url = f"https://yahoo.com{symbol}"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}).json()
+        if res.get('quotes'):
+            name = res['quotes'][0].get('shortname', symbol)
+            for s in ["Semiconductor", "Manufacturing", "Industry", "Co.", "Ltd.", "Holdings"]:
+                name = name.replace(s, "").strip()
+            return name
+    except: pass
+    return symbol
+
+# --- 3. 頂部導航 ---
+st.title("📊 核心數據診斷終端")
+stock_id = st.text_input("輸入代號：", "2330")
+analyze_btn = st.button("執行深度診斷", type="primary", use_container_width=True)
+st.divider()
+
+if analyze_btn or stock_id:
+    sid = stock_id.upper().strip()
+    with st.spinner(f'正在同步盤中數據...'):
+        try:
+            formatted_id = f"{sid}.TW" if sid.isdigit() else sid
+            # 【盤中修正】改用 1m 間隔或加上預載，確保今日即時報價能被讀取
+            ticker = yf.Ticker(formatted_id)
+            df = ticker.history(period="1y", interval="1d")
+            
+            if df.empty and formatted_id.endswith(".TW"):
+                df = yf.download(formatted_id.replace(".TW", ".TWO"), period="1y", interval="1d", progress=False)
+
+            if not df.empty:
+                # 【盤中修正】如果今日資料全為 NaN (開盤前或剛開盤)，移除最後一列
+                if df.iloc[-1].isnull().all():
+                    df = df.iloc[:-1]
+
+                # 指標計算
+                df['MA5'] = df['Close'].rolling(5).mean()
+                df['MA20'] = df['Close'].rolling(20).mean()
+                df['BIAS'] = ((df['Close'] - df['MA20']) / df['MA20']) * 100
+                df['K'] = ((df['Close'] - df['Low'].rolling(9).min()) / (df['High'].rolling(9).max() - df['Low'].rolling(9).min()) * 100).ewm(com=2, adjust=False).mean()
+                df['D'] = df['K'].rolling(3).mean()
+                ema12, ema26 = df['Close'].ewm(span=12).mean(), df['Close'].ewm(span=26).mean()
+                df['DIF'] = ema12 - ema26
+                df['DEA'] = df['DIF'].ewm(span=9).mean()
+                df['MACD_HIST'] = df['DIF'] - df['DEA']
+                df['H20'] = df['High'].rolling(20).max()
+
+                # 提取數據 (增加安全檢查)
+                lp = float(df['Close'].iloc[-1])
+                prev_lp = float(df['Close'].iloc[-2]) if len(df) > 1 else lp
+                ma5_v = float(df['MA5'].iloc[-1])
+                k_v, macd_h, bias_v = float(df['K'].iloc[-1]), float(df['MACD_HIST'].iloc[-1]), float(df['BIAS'].iloc[-1])
+                supp_10 = float(df['Low'].tail(10).min())
+                resi_20 = float(df['H20'].iloc[-1])
+                
+                stock_name = get_real_chinese_name(sid)
+
+                st.subheader(f"🏢 {stock_name} ({sid})")
+                
+                # --- 關鍵價格看板 ---
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("📌 現價", f"{lp:.2f}", f"{lp - prev_lp:.2f}")
+                c2.metric("🚀 買點(MA5)", f"{ma5_v:.2f}")
+                wave_target = max(resi_20, lp * 1.07)
+                c3.metric("🎯 賣點", f"{wave_target:.2f}")
+                c4.metric("🚨 停損", f"{supp_10 * 0.99:.2f}")
+
+                # --- 圖表分頁 ---
+                tab1, tab2, tab3, tab4, tab5 = st.tabs(["K線", "量能", "KD", "MACD", "乖離"])
+                last_date = df.index[-1]
+                start_date = last_date - pd.Timedelta(days=45) 
+                r_df = df[df.index >= start_date]
+
+                with tab1:
+                    y_mi, y_ma = r_df['Low'].min() * 0.98, r_df['High'].max() * 1.02
+                    fig1 = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', increasing_line_color='#FF3232', increasing_fillcolor='#FF3232', decreasing_line_color='#00AB5E', decreasing_fillcolor='#00AB5E')])
+                    fig1.add_trace(go.Scatter(x=df.index, y=df['MA5'], line=dict(color='cyan', width=1.5), name='5MA'))
+                    fig1.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='20MA'))
+                    fig1.update_layout(height=450, xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[y_mi, y_ma], fixedrange=False))
+                    st.plotly_chart(fig1, use_container_width=True)
+
+                with tab2:
+                    v_ma = r_df['Volume'].max() * 1.1
+                    fig2 = go.Figure(data=[go.Bar(x=df.index, y=df['Volume'], marker_color=['#FF3232' if c>=o else '#00AB5E' for c,o in zip(df['Close'], df['Open'])])])
+                    fig2.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[0, v_ma]))
+                    st.plotly_chart(fig2, use_container_width=True)
+
+                with tab3:
+                    fig3 = go.Figure()
+                    fig3.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='#FF3232', width=2), name='K值'))
+                    fig3.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='#00AB5E', width=2), name='D值'))
+                    fig3.add_hline(y=80, line_dash="dash", line_color="gray"); fig3.add_hline(y=20, line_dash="dash", line_color="gray")
+                    fig3.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[0, 100]))
+                    st.plotly_chart(fig3, use_container_width=True)
+
+                with tab4:
+                    st.markdown(f"**MACD >** DIF:{df['DIF'].iloc[-1]:.2f} / HIST: {macd_h:.2f}")
+                    m_ma = max(r_df['MACD_HIST'].abs().max(), r_df['DIF'].abs().max()) * 1.5
+                    fig4 = go.Figure()
+                    fig4.add_trace(go.Bar(x=df.index, y=df['MACD_HIST'], marker_color=['#FF3232' if h>=0 else '#00AB5E' for h in df['MACD_HIST']]))
+                    fig4.add_trace(go.Scatter(x=df.index, y=df['DIF'], line=dict(color='yellow', width=1.5), name='DIF'))
+                    fig4.add_trace(go.Scatter(x=df.index, y=df['DEA'], line=dict(color='cyan', width=1.5), name='DEA'))
+                    fig4.update_layout(height=400, showlegend=False, margin=dict(l=5, r=5, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[-m_ma, m_ma]))
+                    st.plotly_chart(fig4, use_container_width=True)
+
+                with tab5:
+                    b_ma = r_df['BIAS'].abs().max() * 1.4
+                    fig5 = go.Figure(data=[go.Scatter(x=df.index, y=df['BIAS'], line=dict(color='#FFD700', width=2))])
+                    fig5.add_hline(y=0, line_color="white")
+                    fig5.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[-b_ma, b_ma]))
+                    st.plotly_chart(fig5, use_container_width=True)
+
+                # --- 最終操作指引 ---
+                st.divider()
+                st.subheader("💡 實戰操作指引")
+                score = (1 if k_v < 50 else 0) + (1 if macd_h > 0 else 0) + (1 if lp > ma5_v else 0)
+                if score >= 2:
+                    st.success(f"**【 強勢進攻訊號 】**  目標看 **{wave_target:.2f}**，守住 **{ma5_v:.2f}** 續抱。")
+                elif score <= 0:
+                    st.error(f"**【 趨勢轉弱訊號 】**  建議撤離，跌破 **{supp_10 * 0.99:.2f}** 務必保命。")
+                else:
+                    st.warning(f"**【 震盪整理訊號 】**  建議於 **{supp_10:.2f}** 與 **{resi_20:.2f}** 之間操作。")
+
+        except Exception as e: st.error(f"分析異常，可能是開盤初期數據不穩，請稍後再試。原因: {e}")
+
+st.caption("v6.8 | 盤中穩定加強版")
