@@ -32,16 +32,20 @@ st.divider()
 
 if analyze_btn or stock_id:
     sid = stock_id.upper().strip()
-    with st.spinner(f'策略數據分析中...'):
+    with st.spinner(f'正在同步盤中數據...'):
         try:
-            # 搜尋邏輯
             formatted_id = f"{sid}.TW" if sid.isdigit() else sid
-            df = yf.download(formatted_id, period="1y", interval="1d", progress=False)
+            # 【盤中修正】改用 1m 間隔或加上預載，確保今日即時報價能被讀取
+            ticker = yf.Ticker(formatted_id)
+            df = ticker.history(period="1y", interval="1d")
+            
             if df.empty and formatted_id.endswith(".TW"):
                 df = yf.download(formatted_id.replace(".TW", ".TWO"), period="1y", interval="1d", progress=False)
 
             if not df.empty:
-                if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+                # 【盤中修正】如果今日資料全為 NaN (開盤前或剛開盤)，移除最後一列
+                if df.iloc[-1].isnull().all():
+                    df = df.iloc[:-1]
 
                 # 指標計算
                 df['MA5'] = df['Close'].rolling(5).mean()
@@ -53,26 +57,29 @@ if analyze_btn or stock_id:
                 df['DIF'] = ema12 - ema26
                 df['DEA'] = df['DIF'].ewm(span=9).mean()
                 df['MACD_HIST'] = df['DIF'] - df['DEA']
-                high_20 = df['High'].rolling(20).max()
+                df['H20'] = df['High'].rolling(20).max()
 
-                # 最新數據
+                # 提取數據 (增加安全檢查)
                 lp = float(df['Close'].iloc[-1])
+                prev_lp = float(df['Close'].iloc[-2]) if len(df) > 1 else lp
                 ma5_v = float(df['MA5'].iloc[-1])
                 k_v, macd_h, bias_v = float(df['K'].iloc[-1]), float(df['MACD_HIST'].iloc[-1]), float(df['BIAS'].iloc[-1])
-                supp_10, resi_10 = float(df['Low'].tail(10).min()), float(df['High'].tail(10).max())
+                supp_10 = float(df['Low'].tail(10).min())
+                resi_20 = float(df['H20'].iloc[-1])
+                
                 stock_name = get_real_chinese_name(sid)
 
                 st.subheader(f"🏢 {stock_name} ({sid})")
                 
                 # --- 關鍵價格看板 ---
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("📌 現價", f"{lp:.2f}", f"{lp - df['Close'].iloc[-2]:.2f}")
-                c2.metric("🚀 買點", f"{ma5_v:.2f}")
-                wave_target = max(float(high_20.iloc[-1]), lp * 1.07)
+                c1.metric("📌 現價", f"{lp:.2f}", f"{lp - prev_lp:.2f}")
+                c2.metric("🚀 買點(MA5)", f"{ma5_v:.2f}")
+                wave_target = max(resi_20, lp * 1.07)
                 c3.metric("🎯 賣點", f"{wave_target:.2f}")
                 c4.metric("🚨 停損", f"{supp_10 * 0.99:.2f}")
 
-                # --- 圖表顯示區 (修正 X 軸與 Y 軸錯誤) ---
+                # --- 圖表分頁 ---
                 tab1, tab2, tab3, tab4, tab5 = st.tabs(["K線", "量能", "KD", "MACD", "乖離"])
                 last_date = df.index[-1]
                 start_date = last_date - pd.Timedelta(days=45) 
@@ -96,13 +103,12 @@ if analyze_btn or stock_id:
                     fig3 = go.Figure()
                     fig3.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='#FF3232', width=2), name='K值'))
                     fig3.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='#00AB5E', width=2), name='D值'))
-                    fig3.add_hline(y=80, line_dash="dash", line_color="gray")
-                    fig3.add_hline(y=20, line_dash="dash", line_color="gray")
-                    # 【修正處】補上 [0, 100] 數值
+                    fig3.add_hline(y=80, line_dash="dash", line_color="gray"); fig3.add_hline(y=20, line_dash="dash", line_color="gray")
                     fig3.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(range=[start_date, last_date]), yaxis=dict(range=[0, 100]))
                     st.plotly_chart(fig3, use_container_width=True)
 
                 with tab4:
+                    st.markdown(f"**MACD >** DIF:{df['DIF'].iloc[-1]:.2f} / HIST: {macd_h:.2f}")
                     m_ma = max(r_df['MACD_HIST'].abs().max(), r_df['DIF'].abs().max()) * 1.5
                     fig4 = go.Figure()
                     fig4.add_trace(go.Bar(x=df.index, y=df['MACD_HIST'], marker_color=['#FF3232' if h>=0 else '#00AB5E' for h in df['MACD_HIST']]))
@@ -123,15 +129,12 @@ if analyze_btn or stock_id:
                 st.subheader("💡 實戰操作指引")
                 score = (1 if k_v < 50 else 0) + (1 if macd_h > 0 else 0) + (1 if lp > ma5_v else 0)
                 if score >= 2:
-                    st.success(f"**【 強勢進攻訊號 】**")
-                    st.write(f"👉 **操作**：氣勢正旺，目標看 **{wave_target:.2f}** 元。沒破 **{ma5_v:.2f}** 就續抱。")
+                    st.success(f"**【 強勢進攻訊號 】**  目標看 **{wave_target:.2f}**，守住 **{ma5_v:.2f}** 續抱。")
                 elif score <= 0:
-                    st.error(f"**【 趨勢轉弱訊號 】**")
-                    st.write(f"👉 **建議**：跌破 **{supp_10 * 0.99:.2f}** 務必保命撤離。")
+                    st.error(f"**【 趨勢轉弱訊號 】**  建議撤離，跌破 **{supp_10 * 0.99:.2f}** 務必保命。")
                 else:
-                    st.warning("**【 震盪整理訊號 】**")
-                    st.write(f"👉 **策略**：建議於 **{supp_10:.2f}** 與 **{resi_10:.2f}** 之間操作。")
+                    st.warning(f"**【 震盪整理訊號 】**  建議於 **{supp_10:.2f}** 與 **{resi_20:.2f}** 之間操作。")
 
-        except Exception as e: st.error(f"分析異常：{e}")
+        except Exception as e: st.error(f"分析異常，可能是開盤初期數據不穩，請稍後再試。原因: {e}")
 
-st.caption("v6.7 | 語法修正與手機視覺優化版")
+st.caption("v6.8 | 盤中穩定加強版")
